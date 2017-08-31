@@ -266,8 +266,13 @@ struct link_map
     ElfW(Word) l_flags_1;
     ElfW(Word) l_flags;
 
-    /* Temporarily used in `dl_close'.  */
-    int l_idx;
+    union
+      {
+        /* Temporarily used in `dl_close'.  */
+        int l_idx;
+        /* Temporarily used in `sort_initfini'.  */
+        int l_dfs;
+      };
 
     struct link_map_machine l_mach;
 

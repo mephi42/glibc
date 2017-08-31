@@ -151,6 +151,76 @@ preload (struct list *known, unsigned int *nlist, struct link_map *map)
   map->l_reserved = 1;
 }
 
+static void
+sort_initfini (struct link_map **dst, struct link_map **src, int n)
+{
+  /* executable */
+  dst[0] = src[0];
+  dst += n;
+
+  enum
+    {
+      link_map_new = -1,
+      link_map_done = -2,
+    };
+  for (int i = 1; i < n; ++i)
+    src[i]->l_dfs = link_map_new;
+
+  for (int i = 1; i < n; ++i)
+    {
+      /* dfs starting from src[i] */
+      struct
+        {
+          struct link_map *l;
+          struct link_map **deps;
+        } stk[n];
+      int j = 0;
+      stk[j].l = src[i];
+      stk[j].deps = stk[j].l->l_initfini;
+      while (j >= 0)
+        {
+          switch (stk[j].l->l_dfs)
+            {
+            case link_map_done:
+              /* fully processed, go up */
+              --j;
+              break;
+            case link_map_new:
+              /* newly found, save the current level */
+              stk[j].l->l_dfs = j;
+              /* fall through */
+            default:
+              /* in progress, check if the level is right */
+              if (stk[j].l->l_dfs == j)
+                {
+                  /* yes, continue following dependencies */
+                  if (stk[j].deps && *stk[j].deps)
+                    {
+                      /* follow dependency */
+                      ++j;
+                      stk[j].l = *stk[j - 1].deps;
+                      stk[j].deps = stk[j].l->l_initfini;
+                      ++(*stk[j - 1].deps);
+                    }
+                  else
+                    {
+                      /* no more dependencies, go up */
+                      *(--dst) = stk[j].l;
+                      stk[j].l->l_dfs = link_map_done;
+                      --j;
+                    }
+                }
+              else
+                {
+                  /* the level is wrong, go up */
+                  --j;
+                }
+              break;
+            }
+        }
+    }
+}
+
 void
 _dl_map_object_deps (struct link_map *map,
 		     struct link_map **preloads, unsigned int npreloads,
@@ -583,64 +653,7 @@ Filters not supported with LD_TRACE_PRELINKING"));
 
   /* Sort the initializer list to take dependencies into account.  The binary
      itself will always be initialize last.  */
-  memcpy (l_initfini, map->l_searchlist.r_list,
-	  nlist * sizeof (struct link_map *));
-  if (__glibc_likely (nlist > 1))
-    {
-      /* We can skip looking for the binary itself which is at the front
-	 of the search list.  */
-      i = 1;
-      uint16_t seen[nlist];
-      memset (seen, 0, nlist * sizeof (seen[0]));
-      while (1)
-	{
-	  /* Keep track of which object we looked at this round.  */
-	  ++seen[i];
-	  struct link_map *thisp = l_initfini[i];
-
-	  /* Find the last object in the list for which the current one is
-	     a dependency and move the current object behind the object
-	     with the dependency.  */
-	  unsigned int k = nlist - 1;
-	  while (k > i)
-	    {
-	      struct link_map **runp = l_initfini[k]->l_initfini;
-	      if (runp != NULL)
-		/* Look through the dependencies of the object.  */
-		while (*runp != NULL)
-		  if (__glibc_unlikely (*runp++ == thisp))
-		    {
-		      /* Move the current object to the back past the last
-			 object with it as the dependency.  */
-		      memmove (&l_initfini[i], &l_initfini[i + 1],
-			       (k - i) * sizeof (l_initfini[0]));
-		      l_initfini[k] = thisp;
-
-		      if (seen[i + 1] > nlist - i)
-			{
-			  ++i;
-			  goto next_clear;
-			}
-
-		      uint16_t this_seen = seen[i];
-		      memmove (&seen[i], &seen[i + 1],
-			       (k - i) * sizeof (seen[0]));
-		      seen[k] = this_seen;
-
-		      goto next;
-		    }
-
-	      --k;
-	    }
-
-	  if (++i == nlist)
-	    break;
-	next_clear:
-	  memset (&seen[i], 0, (nlist - i) * sizeof (seen[0]));
-
-	next:;
-	}
-    }
+  sort_initfini(l_initfini, map->l_searchlist.r_list, nlist);
 
   /* Terminate the list of dependencies.  */
   l_initfini[nlist] = NULL;
