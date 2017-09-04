@@ -1,0 +1,7 @@
+version: '2'
+services:
+  glibc-build:
+    build: glibc-build
+    volumes:
+      - .:/usr/src/glibc
+    working_dir: /usr/src/glibc
